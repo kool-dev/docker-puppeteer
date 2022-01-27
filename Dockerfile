@@ -1,15 +1,19 @@
-FROM node:14-alpine
+FROM node:16-alpine
 
 # as suggested at https://github.com/puppeteer/puppeteer/blob/main/docs/troubleshooting.md#running-puppeteer-in-docker
 
-RUN apk add --no-cache \
+COPY shrinkpdf.sh /usr/local/bin/shinkpdf
+
+RUN chmod +x /usr/local/bin/shinkpdf \
+    && apk add --no-cache \
       chromium \
       nss \
       freetype \
       freetype-dev \
       harfbuzz \
       ca-certificates \
-      ttf-freefont
+      ttf-freefont \
+      ghostscript
 
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
