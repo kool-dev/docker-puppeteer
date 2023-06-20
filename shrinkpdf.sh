@@ -1,9 +1,9 @@
 #!/bin/sh
 
-# http://www.alfredklomp.com/programming/shrinkpdf
+# https://github.com/aklomp/shrinkpdf
 # Licensed under the 3-clause BSD license:
 #
-# Copyright (c) 2014-2019, Alfred Klomp
+# Copyright (c) 2014-2022, Alfred Klomp
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -32,36 +32,79 @@
 
 shrink ()
 {
+	if [ "$grayscale" = "YES" ]; then
+		gray_params="-sProcessColorModel=DeviceGray \
+		             -sColorConversionStrategy=Gray \
+		             -dOverrideICC"
+	else
+		gray_params=""
+	fi
+
+	# Allow unquoted variables; we want word splitting for $gray_params.
+	# shellcheck disable=SC2086
 	gs					\
 	  -q -dNOPAUSE -dBATCH -dSAFER		\
 	  -sDEVICE=pdfwrite			\
-	  -dCompatibilityLevel=1.3		\
+	  -dCompatibilityLevel="$4"		\
 	  -dPDFSETTINGS=/screen			\
 	  -dEmbedAllFonts=true			\
 	  -dSubsetFonts=true			\
 	  -dAutoRotatePages=/None		\
 	  -dColorImageDownsampleType=/Bicubic	\
-	  -dColorImageResolution=$3		\
+	  -dColorImageResolution="$3"		\
 	  -dGrayImageDownsampleType=/Bicubic	\
-	  -dGrayImageResolution=$3		\
+	  -dGrayImageResolution="$3"		\
 	  -dMonoImageDownsampleType=/Subsample	\
-	  -dMonoImageResolution=$3		\
+	  -dMonoImageResolution="$3"		\
 	  -sOutputFile="$2"			\
+	  ${gray_params}			\
 	  "$1"
+}
+
+get_pdf_version ()
+{
+	# $1 is the input file. The PDF version is contained in the
+	# first 1024 bytes and will be extracted from the PDF file.
+	pdf_version=$(cut -b -1024 "$1" | awk 'BEGIN { found=0 }{ if (match($0, "%PDF-[0-9]\\.[0-9]") && ! found) { print substr($0, RSTART + 5, 3); found=1 } }')
+	if [ -z "$pdf_version" ] || [ "${#pdf_version}" != "3" ]; then
+		return 1
+	fi
+}
+
+
+check_input_file ()
+{
+	# Check if the given file exists.
+	if [ ! -f "$1" ]; then
+		echo "Error: Input file does not exist." >&2
+		return 1
+	fi
 }
 
 check_smaller ()
 {
 	# If $1 and $2 are regular files, we can compare file sizes to
 	# see if we succeeded in shrinking. If not, we copy $1 over $2:
-	if [ ! -f "$1" -o ! -f "$2" ]; then
+	if [ ! -f "$1" ] || [ ! -f "$2" ]; then
 		return 0;
 	fi
-	ISIZE="$(echo $(wc -c "$1") | cut -f1 -d\ )"
-	OSIZE="$(echo $(wc -c "$2") | cut -f1 -d\ )"
+	ISIZE="$(wc -c "$1" | awk '{ print $1 }')"
+	OSIZE="$(wc -c "$2" | awk '{ print $1 }')"
 	if [ "$ISIZE" -lt "$OSIZE" ]; then
 		echo "Input smaller than output, doing straight copy" >&2
 		cp "$1" "$2"
+	fi
+}
+
+check_overwrite ()
+{
+	# If $1 and $2 refer to the same file, then the file would get
+	# truncated to zero, which is unexpected. Abort the operation.
+	# Unfortunately the stronger `-ef` test is not in POSIX.
+	if [ "$1" = "$2" ]; then
+		echo "The output file is the same as the input file. This would truncate the file." >&2
+		echo "Use a temporary file as an intermediate step." >&2
+		return 1
 	fi
 }
 
@@ -69,31 +112,64 @@ usage ()
 {
 	echo "Reduces PDF filesize by lossy recompressing with Ghostscript."
 	echo "Not guaranteed to succeed, but usually works."
-	echo "  Usage: $1 infile [outfile] [resolution_in_dpi]"
+	echo
+	echo "Usage: $1 [-g] [-h] [-o output] [-r res] infile"
+	echo
+	echo "Options:"
+	echo " -g  Enable grayscale conversion which can further reduce output size."
+	echo " -h  Show this help text."
+	echo " -o  Output file, default is standard output."
+	echo " -r  Resolution in DPI, default is 72."
 }
 
-IFILE="$1"
+# Set default option values.
+grayscale=""
+ofile="-"
+res="72"
 
-# Need an input file:
-if [ -z "$IFILE" ]; then
+# Parse command line options.
+while getopts ':hgo:r:' flag; do
+  case $flag in
+    h)
+      usage "$0"
+      exit 0
+      ;;
+    g)
+      grayscale="YES"
+      ;;
+    o)
+      ofile="${OPTARG}"
+      ;;
+    r)
+      res="${OPTARG}"
+      ;;
+    \?)
+      echo "invalid option (use -h for help)"
+      exit 1
+      ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+# An input file is required.
+if [ -z "$1" ]; then
 	usage "$0"
 	exit 1
-fi
-
-# Output filename defaults to "-" (stdout) unless given:
-if [ ! -z "$2" ]; then
-	OFILE="$2"
 else
-	OFILE="-"
+	ifile="$1"
 fi
 
-# Output resolution defaults to 72 unless given:
-if [ ! -z "$3" ]; then
-	res="$3"
-else
-	res="72"
-fi
+# Check if input file exists
+check_input_file "$ifile" || exit $?
 
-shrink "$IFILE" "$OFILE" "$res" || exit $?
+# Check that the output file is not the same as the input file.
+check_overwrite "$ifile" "$ofile" || exit $?
 
-check_smaller "$IFILE" "$OFILE"
+# Get the PDF version of the input file.
+get_pdf_version "$ifile" || pdf_version="1.5"
+
+# Shrink the PDF.
+shrink "$ifile" "$ofile" "$res" "$pdf_version" || exit $?
+
+# Check that the output is actually smaller.
+check_smaller "$ifile" "$ofile"
