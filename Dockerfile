@@ -1,4 +1,4 @@
-FROM node:16-alpine
+FROM node:18-alpine
 
 # as suggested at https://github.com/puppeteer/puppeteer/blob/main/docs/troubleshooting.md#running-puppeteer-in-docker
 
